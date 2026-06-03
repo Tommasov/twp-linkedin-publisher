@@ -1,9 +1,11 @@
 <?php
 /**
  * Plugin Name: TWP - LinkedIn Publisher
- * Description: Aggiunge un bottone per pubblicare manualmente i post su LinkedIn aziendale con OAuth2.
+ * Description: A lightweight WordPress plugin that allows manual publishing of posts to a LinkedIn Company Page using OAuth2 authentication. It adds a "Publish to LinkedIn" button to the post editor sidebar.
  * Version: 1.1
  * Author: Tommaso Vietina
+ * Text Domain: twp-linkedin-publisher
+ * License: GPL-2.0-or-later
  */
 
 use JetBrains\PhpStorm\NoReturn;
