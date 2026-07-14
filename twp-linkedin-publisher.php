@@ -45,6 +45,7 @@ class TWP_LinkedIn_Publisher {
         add_action( 'template_redirect', [ $this, 'handle_linkedin_callback' ] );
         add_action( 'admin_menu', [ $this, 'add_settings_page' ] );
         add_action( 'add_meta_boxes', [ $this, 'add_linkedin_publish_button' ] );
+        add_action( 'admin_enqueue_scripts', [ $this, 'enqueue_media_assets' ] );
         add_action( 'save_post', [ $this, 'save_linkedin_meta' ] );
         add_action( 'admin_post_twp_publish_to_linkedin', [ $this, 'publish_to_linkedin' ] );
         add_action( 'admin_post_twp_dryrun_to_linkedin', [ $this, 'dry_run_to_linkedin' ] );
@@ -337,33 +338,142 @@ class TWP_LinkedIn_Publisher {
         echo '<p><label for="twp_linkedin_content"><strong>Testo del post LinkedIn</strong></label></p>';
         echo '<textarea id="twp_linkedin_content" name="twp_linkedin_content" rows="5" style="width:100%;" placeholder="Se lasci vuoto verrà usato il riassunto (excerpt) dell\'articolo.">' . esc_textarea( $custom_content ) . '</textarea>';
 
-        // Galleria immagini caricate nell'articolo.
-        $images = $this->get_post_images( $post->ID );
+        // Galleria immagini: rilevate nell'articolo + eventuali immagini
+        // aggiunte manualmente dalla libreria (salvate ma non presenti nel post).
+        $selected_ints = array_map( 'intval', $selected_images );
+        $detected      = $this->get_post_images( $post->ID );
+
+        // Aggiungi in coda le immagini selezionate che non sono state rilevate
+        // (es. media caricato apposta per LinkedIn, non presente nell'articolo).
+        $all_images = $detected;
+        foreach ( $selected_ints as $sel_id ) {
+            if ( $sel_id && ! in_array( $sel_id, $all_images, true ) && wp_attachment_is_image( $sel_id ) ) {
+                $all_images[] = $sel_id;
+            }
+        }
+
         echo '<p style="margin-top:12px;"><strong>Immagini da pubblicare</strong></p>';
 
-        if ( empty( $images ) ) {
-            echo '<p><em>Nessuna immagine caricata in questo articolo. Se non selezioni nulla verrà usata l\'immagine in evidenza (se presente).</em></p>';
-        } else {
-            echo '<div style="display:flex;flex-wrap:wrap;gap:8px;max-height:260px;overflow-y:auto;">';
-            foreach ( $images as $att_id ) {
-                $thumb   = wp_get_attachment_image_url( $att_id, 'thumbnail' );
-                $checked = in_array( $att_id, array_map( 'intval', $selected_images ), true ) ? 'checked' : '';
-                if ( ! $thumb ) {
-                    continue;
-                }
-                echo '<label style="position:relative;cursor:pointer;display:inline-block;">';
-                echo '<input type="checkbox" name="twp_linkedin_images[]" value="' . esc_attr( $att_id ) . '" ' . $checked . ' style="position:absolute;top:4px;left:4px;">';
-                echo '<img src="' . esc_url( $thumb ) . '" style="width:70px;height:70px;object-fit:cover;border:1px solid #ccc;border-radius:4px;" alt="">';
-                echo '</label>';
+        echo '<div id="twp-li-images" style="display:flex;flex-wrap:wrap;gap:8px;max-height:260px;overflow-y:auto;">';
+        foreach ( $all_images as $att_id ) {
+            $thumb = wp_get_attachment_image_url( $att_id, 'thumbnail' );
+            if ( ! $thumb ) {
+                continue;
             }
-            echo '</div>';
-            echo '<p><em>Spunta le immagini da includere nel post (galleria multi-immagine, massimo ' . self::MAX_IMAGES . ').</em></p>';
+            $checked = in_array( $att_id, $selected_ints, true ) ? 'checked' : '';
+            echo '<label style="position:relative;cursor:pointer;display:inline-block;">';
+            echo '<input type="checkbox" name="twp_linkedin_images[]" value="' . esc_attr( $att_id ) . '" ' . $checked . ' style="position:absolute;top:4px;left:4px;">';
+            echo '<img src="' . esc_url( $thumb ) . '" style="width:70px;height:70px;object-fit:cover;border:1px solid #ccc;border-radius:4px;" alt="">';
+            echo '</label>';
         }
+        echo '</div>';
+
+        echo '<p style="margin-top:6px;"><button type="button" class="button button-secondary" id="twp-li-add-image">➕ Aggiungi immagine dalla libreria</button></p>';
+        echo '<p><em>Spunta le immagini da includere nel post (galleria multi-immagine, massimo ' . self::MAX_IMAGES . '). Puoi aggiungere anche immagini non presenti nell\'articolo dalla libreria media.</em></p>';
+
+        $this->render_media_picker_script();
 
         echo '<hr>';
         echo '<p style="color:#856404;background:#fff3cd;padding:6px 8px;border-radius:4px;font-size:12px;">⚠️ <strong>Salva/Aggiorna il post</strong> prima di usare Simula o Pubblica: questi pulsanti aprono un\'altra pagina e <strong>non salvano</strong> il testo e le immagini appena spuntati.</p>';
         echo '<p><a href="' . esc_url( $dryrun_link ) . '" class="button button-secondary">🧪 Simula (dry-run)</a></p>';
         echo '<p><a href="' . esc_url( $link ) . '" class="button button-primary">🔗 Pubblica su LinkedIn</a></p>';
+    }
+
+    /**
+     * Carica gli script del media picker di WordPress nelle schermate di modifica del post.
+     *
+     * @param string $hook
+     *
+     * @return void
+     */
+    public function enqueue_media_assets( string $hook ): void {
+        if ( $hook === 'post.php' || $hook === 'post-new.php' ) {
+            wp_enqueue_media();
+        }
+    }
+
+    /**
+     * Stampa lo script che apre la libreria media di WordPress e aggiunge
+     * le immagini selezionate (anche non presenti nell'articolo) alla galleria LinkedIn.
+     *
+     * @return void
+     */
+    private function render_media_picker_script(): void {
+        ?>
+        <script>
+        ( function () {
+            function init() {
+                var btn = document.getElementById( 'twp-li-add-image' );
+                var box = document.getElementById( 'twp-li-images' );
+                if ( ! btn || ! box ) {
+                    return;
+                }
+
+                var frame;
+                btn.addEventListener( 'click', function ( e ) {
+                    e.preventDefault();
+
+                    if ( typeof wp === 'undefined' || ! wp.media ) {
+                        console.warn( 'TWP LinkedIn: la libreria media di WordPress non è disponibile.' );
+                        return;
+                    }
+
+                    if ( frame ) {
+                        frame.open();
+                        return;
+                    }
+
+                    frame = wp.media( {
+                        title: 'Seleziona immagini per LinkedIn',
+                        button: { text: 'Aggiungi alla galleria LinkedIn' },
+                        library: { type: 'image' },
+                        multiple: true
+                    } );
+
+                    frame.on( 'select', function () {
+                        var selection = frame.state().get( 'selection' ).toJSON();
+                        selection.forEach( function ( att ) {
+                            // Se l'immagine è già presente, limitati a spuntarla.
+                            var existing = box.querySelector( 'input[name="twp_linkedin_images[]"][value="' + att.id + '"]' );
+                            if ( existing ) {
+                                existing.checked = true;
+                                return;
+                            }
+
+                            var thumb = ( att.sizes && att.sizes.thumbnail ) ? att.sizes.thumbnail.url : att.url;
+                            var label = document.createElement( 'label' );
+                            label.style.cssText = 'position:relative;cursor:pointer;display:inline-block;';
+
+                            var input = document.createElement( 'input' );
+                            input.type = 'checkbox';
+                            input.name = 'twp_linkedin_images[]';
+                            input.value = att.id;
+                            input.checked = true;
+                            input.style.cssText = 'position:absolute;top:4px;left:4px;';
+
+                            var img = document.createElement( 'img' );
+                            img.src = thumb;
+                            img.alt = '';
+                            img.style.cssText = 'width:70px;height:70px;object-fit:cover;border:1px solid #ccc;border-radius:4px;';
+
+                            label.appendChild( input );
+                            label.appendChild( img );
+                            box.appendChild( label );
+                        } );
+                    } );
+
+                    frame.open();
+                } );
+            }
+
+            if ( document.readyState === 'loading' ) {
+                document.addEventListener( 'DOMContentLoaded', init );
+            } else {
+                init();
+            }
+        } )();
+        </script>
+        <?php
     }
 
     /**
